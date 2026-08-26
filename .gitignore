@@ -1,0 +1,16 @@
+# runtime database
+*.db
+*.sqlite
+*.sqlite3
+
+# exported transcripts
+session-*.txt
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store
