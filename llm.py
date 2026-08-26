@@ -11,6 +11,7 @@ SpeakerCache is kept as a no-op shim so play.py and cli.py are unchanged.
 """
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 
@@ -152,17 +153,25 @@ def _strip_think(text):
     return text.lstrip()
 
 
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.S)
+_THINK_OPEN = re.compile(r"<think>.*$", re.S)
+
+
 def _visible(raw):
-    """Strip reasoning blocks. Returns '' while a block is still open."""
-    if "</think>" in raw:
-        return raw.split("</think>", 1)[1]
-    if "<think>" in raw:
-        return ""
+    """Everything outside <think> blocks, including any text that preceded one.
+
+    Monotonic by construction: as more of the stream arrives this only ever
+    grows. The previous version returned '' as soon as a block opened, which
+    made the visible view SHRINK between events — and a numeric high-water
+    mark then sat above it permanently, swallowing the real line.
+    """
+    t = _THINK_BLOCK.sub("", raw)
+    t = _THINK_OPEN.sub("", t)
     # a partial opening tag may still be arriving
-    for i in range(1, len("<think>")):
-        if raw.endswith("<think>"[:i]):
-            return raw[: -i]
-    return raw
+    for i in range(len("<think>") - 1, 0, -1):
+        if t.endswith("<think>"[:i]):
+            return t[:-i]
+    return t
 
 
 def stream_line(prompt_bundle, cache_key, caches, max_tokens=220, temp=0.85,
@@ -183,7 +192,8 @@ def stream_line(prompt_bundle, cache_key, caches, max_tokens=220, temp=0.85,
     }
 
     raw_buf = ""
-    emitted = 0
+    # Track the exact text yielded, not its length — see _visible above.
+    emitted = ""
     debug = os.environ.get("IMAGINARIUM_DEBUG") == "1"
 
     with _post_chat(_messages(prompt_bundle), True, options) as resp:
@@ -193,29 +203,29 @@ def stream_line(prompt_bundle, cache_key, caches, max_tokens=220, temp=0.85,
             evt = json.loads(line)
             raw_buf += evt.get("message", {}).get("content", "")
 
-            clean = _visible(raw_buf)
-            body = clean.lstrip()
-            lead = len(clean) - len(body)
+            # lstrip: models routinely open a turn with a newline, and that
+            # must not count as content or as the terminating newline.
+            body = _visible(raw_buf).lstrip()
 
             cut = body.find("\n") if stop_on_newline else -1
             if cut != -1:
-                final = clean[: lead + cut]
-                if len(final) > emitted:
-                    yield final[emitted:]
+                final = body[:cut]
+                if final.startswith(emitted) and len(final) > len(emitted):
+                    yield final[len(emitted):]
                 if debug:
                     print(f"\n[raw: {raw_buf!r}]", flush=True)
                 return
 
-            if len(clean) > emitted:
-                yield clean[emitted:]
-                emitted = len(clean)
+            if body.startswith(emitted) and len(body) > len(emitted):
+                yield body[len(emitted):]
+                emitted = body
 
             if evt.get("done"):
                 break
 
     if debug:
         print(f"\n[raw: {raw_buf!r}]", flush=True)
-    if emitted == 0 and raw_buf.strip():
+    if not emitted and raw_buf.strip():
         # everything got swallowed as reasoning — surface it rather than
         # silently producing nothing
         print(f"\n[model returned only reasoning; set IMAGINARIUM_DEBUG=1 to see it]",

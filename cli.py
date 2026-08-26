@@ -440,8 +440,11 @@ def cmd_play(args):
             parts = raw.split(maxsplit=1)
             if len(parts) > 1:
                 try:
-                    llm.load_model(parts[1].strip())
-                    llm.set_model(parts[1].strip())
+                    # load_model resolves a bare stem to its full tag; using the
+                    # raw input instead set MODEL to something that 404s at
+                    # generation time.
+                    resolved, _ = llm.load_model(parts[1].strip())
+                    llm.set_model(resolved)
                     caches.invalidate()
                     print(f"  model = {llm.MODEL}")
                 except RuntimeError as e:
