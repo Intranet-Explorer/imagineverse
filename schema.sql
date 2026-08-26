@@ -48,15 +48,45 @@ CREATE TABLE IF NOT EXISTS location (
     description      TEXT NOT NULL,
     -- unused in v0
     prompt_fragment  TEXT NOT NULL DEFAULT '',
+    -- locked framing every sprite for this location is generated against;
+    -- vary it and the staging anchors stop being valid
+    camera_contract  TEXT NOT NULL DEFAULT '',
+    -- JSON list of {id, pose_class, note}; becomes anchors when images land
+    staging          TEXT NOT NULL DEFAULT '[]',
     created_at       TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (world_id, name)
 );
+
+CREATE TABLE IF NOT EXISTS relationship (
+    id          INTEGER PRIMARY KEY,
+    world_id    INTEGER NOT NULL REFERENCES world(id) ON DELETE CASCADE,
+    -- directional: what `from` feels and wants toward `to`
+    from_id     INTEGER NOT NULL REFERENCES character(id) ON DELETE CASCADE,
+    to_id       INTEGER NOT NULL REFERENCES character(id) ON DELETE CASCADE,
+    -- what from_id is trying to get out of to_id in any scene they share
+    wants       TEXT NOT NULL DEFAULT '',
+    -- what from_id will not say first, and what it costs to say it
+    withholds   TEXT NOT NULL DEFAULT '',
+    -- symmetric: written identically on both rows of a pair
+    history     TEXT NOT NULL DEFAULT '',
+    friction    TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (from_id, to_id),
+    CHECK (from_id <> to_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rel_from ON relationship(from_id);
+CREATE INDEX IF NOT EXISTS idx_rel_world ON relationship(world_id);
 
 CREATE TABLE IF NOT EXISTS session (
     id           INTEGER PRIMARY KEY,
     world_id     INTEGER NOT NULL REFERENCES world(id) ON DELETE CASCADE,
     location_id  INTEGER NOT NULL REFERENCES location(id),
     premise      TEXT NOT NULL DEFAULT '',
+    -- rolling summary of turns 0..summary_upto-1; the prompt sends this plus
+    -- the last WINDOW turns verbatim instead of the whole transcript
+    summary      TEXT NOT NULL DEFAULT '',
+    summary_upto INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

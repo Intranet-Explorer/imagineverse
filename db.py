@@ -15,9 +15,30 @@ def connect():
     return conn
 
 
+def _ensure_column(conn, table, column, decl):
+    """Add a column to an existing database. schema.sql CREATE TABLE statements
+    are IF NOT EXISTS, so they never alter a table that already exists — new
+    columns have to be migrated in explicitly."""
+    have = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")]
+    if column not in have:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        return True
+    return False
+
+
+MIGRATIONS = [
+    ("session", "summary", "TEXT NOT NULL DEFAULT ''"),
+    ("session", "summary_upto", "INTEGER NOT NULL DEFAULT 0"),
+    ("location", "camera_contract", "TEXT NOT NULL DEFAULT ''"),
+    ("location", "staging", "TEXT NOT NULL DEFAULT '[]'"),
+]
+
+
 def init():
     conn = connect()
     conn.executescript(SCHEMA.read_text())
+    for table, column, decl in MIGRATIONS:
+        _ensure_column(conn, table, column, decl)
     conn.commit()
     return conn
 
@@ -103,13 +124,16 @@ def outfits_for(conn, char_id):
 
 def location_insert(conn, world_id, spec):
     cur = conn.execute(
-        """INSERT INTO location (world_id, name, description, prompt_fragment)
-           VALUES (?,?,?,?)""",
+        """INSERT INTO location
+           (world_id, name, description, prompt_fragment, camera_contract, staging)
+           VALUES (?,?,?,?,?,?)""",
         (
             world_id,
             spec["name"],
             spec.get("description", ""),
             spec.get("prompt_fragment", ""),
+            spec.get("camera_contract", ""),
+            json.dumps(spec.get("staging", [])),
         ),
     )
     conn.commit()
@@ -200,3 +224,99 @@ def turn_pop(conn, sid):
         conn.execute("DELETE FROM turn WHERE id = ?", (row["id"],))
         conn.commit()
     return row
+
+
+# ---------- relationship ----------
+
+def relationship_upsert(conn, world_id, from_id, to_id, wants, withholds,
+                        history="", friction=""):
+    conn.execute(
+        """INSERT INTO relationship
+           (world_id, from_id, to_id, wants, withholds, history, friction)
+           VALUES (?,?,?,?,?,?,?)
+           ON CONFLICT(from_id, to_id) DO UPDATE SET
+             wants=excluded.wants, withholds=excluded.withholds,
+             history=excluded.history, friction=excluded.friction""",
+        (world_id, from_id, to_id, wants, withholds, history, friction),
+    )
+    conn.commit()
+
+
+def relationship_pair_insert(conn, world_id, a_id, b_id, spec):
+    """Write both directions of one pair from a RELATIONSHIP_SYSTEM record.
+    history and friction are symmetric and stored identically on both rows."""
+    hist = spec.get("history", "")
+    fric = spec.get("friction", "")
+    relationship_upsert(conn, world_id, a_id, b_id,
+                        spec.get("a_wants_from_b", ""),
+                        spec.get("a_withholds", ""), hist, fric)
+    relationship_upsert(conn, world_id, b_id, a_id,
+                        spec.get("b_wants_from_a", ""),
+                        spec.get("b_withholds", ""), hist, fric)
+
+
+def relationships_from(conn, from_id, to_ids=None):
+    """Rows describing how from_id stands toward each of to_ids."""
+    if to_ids is not None and not to_ids:
+        return []
+    if to_ids is None:
+        return conn.execute(
+            """SELECT r.*, c.name AS to_name FROM relationship r
+               JOIN character c ON c.id = r.to_id
+               WHERE r.from_id = ? ORDER BY c.name""", (from_id,)
+        ).fetchall()
+    marks = ",".join("?" * len(to_ids))
+    return conn.execute(
+        f"""SELECT r.*, c.name AS to_name FROM relationship r
+            JOIN character c ON c.id = r.to_id
+            WHERE r.from_id = ? AND r.to_id IN ({marks}) ORDER BY c.name""",
+        (from_id, *to_ids),
+    ).fetchall()
+
+
+def relationship_pairs_missing(conn, world_id, char_ids):
+    """Unordered pairs among char_ids with no relationship row yet."""
+    have = set()
+    for r in conn.execute(
+        "SELECT from_id, to_id FROM relationship WHERE world_id = ?", (world_id,)
+    ):
+        have.add((r["from_id"], r["to_id"]))
+    out = []
+    ids = sorted(char_ids)
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            if (a, b) not in have or (b, a) not in have:
+                out.append((a, b))
+    return out
+
+
+# ---------- session summary ----------
+
+def session_set_summary(conn, sid, summary, upto):
+    conn.execute("UPDATE session SET summary = ?, summary_upto = ? WHERE id = ?",
+                 (summary, upto, sid))
+    conn.commit()
+
+
+def turns_range(conn, sid, start_idx):
+    """Turns from start_idx onward, in order."""
+    return conn.execute(
+        "SELECT * FROM turn WHERE session_id = ? AND idx >= ? ORDER BY idx",
+        (sid, start_idx),
+    ).fetchall()
+
+
+def turns_before(conn, sid, end_idx):
+    return conn.execute(
+        "SELECT * FROM turn WHERE session_id = ? AND idx < ? ORDER BY idx",
+        (sid, end_idx),
+    ).fetchall()
+
+
+def recent_by_speaker(conn, sid, character_id, limit=3):
+    return conn.execute(
+        """SELECT markup FROM turn
+           WHERE session_id = ? AND character_id = ? AND origin = 'ai'
+           ORDER BY idx DESC LIMIT ?""",
+        (sid, character_id, limit),
+    ).fetchall()

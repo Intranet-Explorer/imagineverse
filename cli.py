@@ -46,6 +46,47 @@ def _multiline(prompt):
     return "\n".join(lines).strip()
 
 
+def _ensure_relationships(conn, world_id, char_ids, ask=True):
+    """Generate the missing pairwise history/friction records for a cast."""
+    import creation
+
+    pairs = db.relationship_pairs_missing(conn, world_id, char_ids)
+    if not pairs:
+        return 0
+    if ask:
+        n = len(pairs)
+        a = input(f"\n{n} pair(s) have no history between them. Write it? [Y/n] ")
+        if a.strip().lower() not in ("", "y"):
+            return 0
+    made = 0
+    for a_id, b_id in pairs:
+        ca, cb = db.character_get(conn, a_id), db.character_get(conn, b_id)
+        print(f"  [{ca['name']} \u2194 {cb['name']} \u2026]")
+        try:
+            spec = creation.make_relationship(ca, cb)
+        except Exception as e:
+            print(f"  \033[31m{e}\033[0m")
+            continue
+        db.relationship_pair_insert(conn, world_id, a_id, b_id, spec)
+        if spec.get("friction"):
+            print(f"    \033[2mfriction:\033[0m {spec['friction']}")
+        made += 1
+    return made
+
+
+def _pair_records(conn, chosen):
+    """Deduplicated history/friction rows among a chosen cast."""
+    ids = [c["id"] for c in chosen]
+    seen, out = set(), []
+    for c in chosen:
+        for r in db.relationships_from(conn, c["id"], [i for i in ids if i != c["id"]]):
+            k = (r["history"], r["friction"])
+            if k not in seen:
+                seen.add(k)
+                out.append(r)
+    return out
+
+
 # ---------- commands ----------
 
 def cmd_char_new(args):
@@ -62,8 +103,13 @@ def cmd_char_new(args):
     tags = input("Style tags (e.g. @kantoku, blank for none): ").strip()
     style_tags = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
-    print("\n[expanding…]")
-    spec = creation.make_character(desc, style_tags=style_tags)
+    cast = db.character_list(conn, wid)
+    if cast:
+        names = ", ".join(c["name"] for c in cast)
+        print(f"\n[expanding against the existing cast: {names}…]")
+    else:
+        print("\n[expanding…]")
+    spec = creation.make_character(desc, cast=cast, style_tags=style_tags)
 
     print(f"\n\033[1m{spec['name']}\033[0m")
     print(f"\n{spec['bio']}\n")
@@ -77,6 +123,9 @@ def cmd_char_new(args):
     if input("\nKeep? [Y/n] ").strip().lower() in ("", "y"):
         cid = db.character_insert(conn, wid, spec, source_desc=desc)
         print(f"saved as character {cid}")
+        ids = [c["id"] for c in db.character_list(conn, wid)]
+        if len(ids) > 1:
+            _ensure_relationships(conn, wid, ids)
     else:
         print("discarded.")
 
@@ -98,6 +147,13 @@ def cmd_char_show(args):
     print(f"\033[1m{c['name']}\033[0m\n\n{c['bio']}\n")
     print("PERSONA\n" + c["persona_prompt"] + "\n")
     print("VOICE\n" + json.dumps(json.loads(c["voice"] or "{}"), indent=2))
+    rels = db.relationships_from(conn, c["id"])
+    if rels:
+        print("\nRELATIONSHIPS")
+        for r in rels:
+            print(f"  -> {r['to_name']}: wants {r['wants']}")
+            if r["friction"]:
+                print(f"     unresolved: {r['friction']}")
     print("\nAPPEARANCE\n" + (c["appearance"] or "(none)"))
 
 
@@ -112,7 +168,11 @@ def cmd_loc_new(args):
     print("\n[expanding…]")
     spec = creation.make_location(desc)
     print(f"\n\033[1m{spec['name']}\033[0m\n\n{spec['description']}\n")
-    if input("Keep? [Y/n] ").strip().lower() in ("", "y"):
+    if spec.get("camera_contract"):
+        print(f"CAMERA  {spec['camera_contract']}")
+    for st in spec.get("staging", []):
+        print(f"  mark  {st.get('id')}  ({st.get('pose_class')})  {st.get('note','')}")
+    if input("\nKeep? [Y/n] ").strip().lower() in ("", "y"):
         lid = db.location_insert(conn, wid, spec)
         print(f"saved as location {lid}")
 
@@ -166,10 +226,32 @@ def cmd_session_new(args):
         print("need a location.")
         return
 
-    premise = input("\nOpening premise: ").strip()
+    if len(chosen) > 1:
+        _ensure_relationships(conn, wid, [c["id"] for c in chosen])
+
+    premise = input("\nOpening premise (blank to write one): ").strip()
+    opening = ""
+    if not premise:
+        import creation
+        print("[writing the situation…]")
+        try:
+            spec = creation.make_premise(chosen, _pair_records(conn, chosen), loc)
+            premise = spec.get("premise", "").strip()
+            opening = spec.get("opening_beat", "").strip()
+            print(f"\n{premise}\n")
+            if opening:
+                print(f"\033[38;5;179mNarrator: {opening}\033[0m\n")
+            if input("Keep? [Y/n] ").strip().lower() not in ("", "y"):
+                premise = input("Opening premise: ").strip()
+                opening = ""
+        except Exception as e:
+            print(f"\033[31m  {e}\033[0m")
+            premise = input("Opening premise: ").strip()
 
     sid = db.session_create(conn, wid, loc["id"], premise,
                             [c["id"] for c in chosen])
+    if opening:
+        db.turn_append(conn, sid, "Narrator", opening, "ai")
     print(f"\nsession {sid} created. run:  python cli.py play {sid}")
 
 
@@ -346,6 +428,10 @@ def cmd_play(args):
         if raw == "/undo":
             gone = db.turn_pop(conn, args.session_id)
             caches.invalidate()
+            if gone and gone["character_id"]:
+                ids = [x["id"] for x in cast]
+                if gone["character_id"] in ids:
+                    rotation = ids.index(gone["character_id"])
             print(f"  removed: {gone['speaker']}: {gone['markup'][:60]}" if gone
                   else "  nothing to undo")
             continue
@@ -386,7 +472,8 @@ def cmd_play(args):
 
         if raw.startswith("/n "):
             text = raw[3:].strip()
-            db.turn_append(conn, args.session_id, "Narrator", text, "human")
+            idx = db.turn_append(conn, args.session_id, "Narrator", text, "human")
+            print(play.render_turn(db.turns(conn, args.session_id)[idx]))
             continue
 
         if raw.startswith("/auto"):
@@ -401,6 +488,7 @@ def cmd_play(args):
                 if line is None:
                     break
                 db.turn_append(conn, args.session_id, c["name"], line, "ai", c["id"])
+                play.maybe_summarize(conn, args.session_id)
             continue
 
         if raw.startswith("/ai"):
@@ -417,14 +505,16 @@ def cmd_play(args):
             if line is None:
                 continue
             db.turn_append(conn, args.session_id, c["name"], line, "ai", c["id"])
+            play.maybe_summarize(conn, args.session_id)
             continue
 
         # "name rest of line" -> speak manually
         head, _, rest = raw.partition(" ")
         c = find_char(head)
         if c and rest.strip():
-            db.turn_append(conn, args.session_id, c["name"], rest.strip(),
-                           "human", c["id"])
+            idx = db.turn_append(conn, args.session_id, c["name"], rest.strip(),
+                                 "human", c["id"])
+            print(play.render_turn(db.turns(conn, args.session_id)[idx]))
             rotation = [x["id"] for x in cast].index(c["id"]) + 1
             continue
 
