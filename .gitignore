@@ -14,3 +14,11 @@ venv/
 
 # macOS
 .DS_Store
+
+# sqlite rollback journals
+*.db-journal
+*.db-wal
+*.db-shm
+
+# junk awaiting manual deletion
+_to_delete/

@@ -67,6 +67,10 @@ CREATE TABLE IF NOT EXISTS relationship (
     wants       TEXT NOT NULL DEFAULT '',
     -- what from_id will not say first, and what it costs to say it
     withholds   TEXT NOT NULL DEFAULT '',
+    -- the scene's exit: what would actually move this person, and the price.
+    -- Without it both sides are specified as immovable and the only variable
+    -- left is intensity, so the scene ratchets instead of developing.
+    concedes    TEXT NOT NULL DEFAULT '',
     -- symmetric: written identically on both rows of a pair
     history     TEXT NOT NULL DEFAULT '',
     friction    TEXT NOT NULL DEFAULT '',

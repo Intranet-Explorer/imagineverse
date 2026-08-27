@@ -216,5 +216,74 @@ creation.make_character("a courier", cast=())
 check("no cast block when world is empty", "COLLIDE" not in seen["system"])
 stub.complete = _orig
 
+# ============================ 9. shape metrics ===========================
+print("\n[9] shape-lock metrics")
+locked = ["Proof is a log. The log is closed.",
+          "A closed log is a loop. The loop has no decay.",
+          "Decay is a variable. The variable is a glitch.",
+          "A glitch is a loop. The loop is a sample."]
+free = ["The tremor is a syncopation error. Your printout is wrong.",
+        "You have two minutes to sign before the log timestamps your refusal.",
+        "Four milliseconds is mechanical. You are conflating hardware with variance.",
+        "I played the bridge at six-five. You flattened it."]
+check("copula rate flags the locked exchange", play.copula_rate(locked)[0] >= 0.6,
+      play.copula_rate(locked))
+check("copula rate clears the live one", play.copula_rate(free)[0] < 0.35,
+      play.copula_rate(free))
+check("carryover flags the locked exchange", play.carryover_rate(locked)[0] >= 0.6,
+      play.carryover_rate(locked))
+check("carryover clears the live one", play.carryover_rate(free)[0] < 0.4,
+      play.carryover_rate(free))
+check("stall_score is high when locked", play.stall_score(locked) >= 0.6)
+check("stall_score is low when live", play.stall_score(free) < 0.4)
+check("stall_score ignores too-short runs", play.stall_score(locked[:2]) == 0.0)
+check("spoken() drops the action tag",
+      play.spoken("<nods slowly> The grid is noise.") == "The grid is noise.")
+check("strip_action drops only the leading tag",
+      play.strip_action("<nods> a <b> c") == "a <b> c")
+
+# ============================ 10. action run cap =========================
+print("\n[10] action run cap and stall nudge")
+sid2 = db.session_create(c2, w, lid, "p", [cid_a, cid_b])
+db.turn_append(c2, sid2, "Ada", "<nods> One.", "ai", cid_a)
+g, forbid = play._guidance(c2, sid2, ada, False)
+check("one tagged line trips the cap (ACTION_RUN=1)", forbid, (g[:40], forbid))
+check("the note is in the guidance", play.NO_ACTION_NOTE in g)
+
+stub.next_line = "<shrugs> Two."
+got = play.generate_turn(c2, sid2, ada, stub.SpeakerCache(), stream=False)
+check("tag stripped when the model ignores it", got == "Two.", got)
+
+db.turn_append(c2, sid2, "Ada", got, "ai", cid_a)
+g2, forbid2 = play._guidance(c2, sid2, ada, False)
+check("cap releases after an untagged line", not forbid2)
+
+sid3 = db.session_create(c2, w, lid, "p", [cid_a, cid_b])
+for t in ["Proof is a log. The log is closed.",
+          "A closed log is a loop. The loop has no decay.",
+          "Decay is a variable. The variable is a glitch.",
+          "A glitch is a loop. The loop is a sample."]:
+    db.turn_append(c2, sid3, "Ada", t, "ai", cid_a)
+g3, _ = play._guidance(c2, sid3, ada, False)
+check("stalled exchange gets the nudge", play.STALL_NOTE in g3)
+sid4 = db.session_create(c2, w, lid, "p", [cid_a, cid_b])
+for t in free:
+    db.turn_append(c2, sid4, "Ada", t, "ai", cid_a)
+g4, _ = play._guidance(c2, sid4, ada, False)
+check("live exchange gets no nudge", play.STALL_NOTE not in g4)
+
+# ============================ 11. the exit ===============================
+print("\n[11] relationship exit")
+db.relationship_pair_insert(c2, w, cid_a, cid_b, {
+    "history": "h", "friction": "f",
+    "a_wants_from_b": "aw", "a_withholds": "ax", "a_concedes": "if Bo names the date",
+    "b_wants_from_a": "bw", "b_withholds": "bx", "b_concedes": "if Ada stops filming"})
+r = db.relationships_from(c2, cid_a, [cid_b])[0]
+check("concedes stored", r["concedes"] == "if Bo names the date", r["concedes"])
+_, u = play.build_prompt(c2, sid, ada)
+check("exit reaches the persona tail", "What would actually move you:" in u)
+check("exit sits after the transcript",
+      u.index("TRANSCRIPT SO FAR") < u.index("What would actually move you:"))
+
 print("\n" + ("ALL PASS" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

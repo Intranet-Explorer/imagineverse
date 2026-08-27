@@ -20,6 +20,12 @@ import llm
 WINDOW = int(os.environ.get("IMAGINARIUM_WINDOW", "24"))
 SUMMARIZE_EVERY = int(os.environ.get("IMAGINARIUM_SUMMARIZE_EVERY", "12"))
 
+# How many consecutive lines from one speaker may carry an action tag. The
+# earn-its-place rule in FORMAT_RULES improved what the actions SAY without
+# touching how often they appear - 79 of 80 turns still had one. A quality
+# test does not create scarcity; a run limit does. 0 disables the cap.
+ACTION_RUN = int(os.environ.get("IMAGINARIUM_ACTION_RUN", "1"))
+
 FORMAT_RULES = """OUTPUT FORMAT - follow exactly:
 
 Write exactly ONE line. The line is:
@@ -49,12 +55,32 @@ DO NOT MIRROR:
   If every line they write starts the same way, yours must not.
 """
 
-SUMMARY_SYSTEM = """You compress the transcript of a scene.
+SUMMARY_SYSTEM = """You keep the running record of a scene.
 
 Return plain prose, no JSON, no preamble, under 150 words, present tense.
-Cover: what has actually happened, what has changed between the people in it,
-and what is still unresolved. Keep proper names. Do not invent events that are
-not in the transcript, and do not editorialise about the characters."""
+
+Record what CHANGED, in order: what either person did, conceded, refused,
+admitted, learned or lost, and where they now stand differently from where
+they began. Keep proper names. Do not invent events.
+
+Do NOT restate their positions or paraphrase their argument. An observed
+failure: a summary describing an "ideological standoff" with "no resolution"
+was read back into the prompt every turn, and the model dutifully continued
+the standoff for sixty more turns. A summary that describes a pattern
+reinforces it.
+
+If nothing actually changed across a stretch, say exactly that - "twelve
+exchanges pass without either giving ground, both restating the same claim in
+new terms" - rather than summarising the claim again."""
+
+STALL_NOTE = """The last several exchanges have traded restatements rather than
+moving. Do not answer their phrasing with a matching phrase, and do not define
+a term they just defined. Do exactly one of these instead: press for the
+concrete thing you actually want, give ground on something small, or put the
+conversation onto something neither of you has said yet."""
+
+NO_ACTION_NOTE = ("Your last line already carried an action. Write this one as "
+                  "dialogue only - no angle brackets at all.")
 
 
 # ---------------------------------------------------------------- prompt
@@ -91,6 +117,8 @@ def _relationship_block(conn, speaker_row, cast):
             seg.append(f"What you want from them: {r['wants']}")
         if r["withholds"]:
             seg.append(f"What you will not say first: {r['withholds']}")
+        if "concedes" in r.keys() and r["concedes"]:
+            seg.append(f"What would actually move you: {r['concedes']}")
         out.append("\n".join(seg))
     return "\n" + "\n".join(out)
 
@@ -199,12 +227,29 @@ def clean_line(text, speaker_name):
 
 _ACTION_TAG = re.compile(r"^\s*<[^>]*>\s*")
 _WORD = re.compile(r"[a-z0-9']+")
+_SENT = re.compile(r"(?<=[.!?])\s+")
+# "X is Y" with nothing else going on. Two characters trading these is the
+# degenerate mode that replaced template lock once openings were unlocked.
+_COPULA = re.compile(
+    r"^(the |a |an )?[\w' ]{1,28}? (is|are|was|were) (the |a |an )?[\w' ]{1,28}[.!?]?$",
+    re.I)
+# Ordinary dialogue is full of copulas ("Your printout is wrong"). The
+# degenerate mode is copulas between BARE ABSTRACTIONS, with nobody in them -
+# so a personal or possessive pronoun anywhere disqualifies the sentence.
+_PERSONAL = re.compile(r"\b(i|me|my|mine|you|your|yours|he|him|his|she|her|hers|"
+                       r"we|us|our|ours|they|them|their|theirs)\b", re.I)
+_STOP = frozenset("the a an is are was were be been it its this that of to in "
+                  "and or not you your i my no on at for with as".split())
+
+
+def spoken(markup):
+    """The dialogue with any leading action tag removed."""
+    return _ACTION_TAG.sub("", markup or "").strip()
 
 
 def opening_key(markup, n=2):
     """First n words of the spoken part, for mirror detection."""
-    spoken = _ACTION_TAG.sub("", markup or "").lower()
-    words = _WORD.findall(spoken)[:n]
+    words = _WORD.findall(spoken(markup).lower())[:n]
     return " ".join(words)
 
 
@@ -212,11 +257,87 @@ def has_action(markup):
     return bool(_ACTION_TAG.match(markup or ""))
 
 
+def strip_action(markup):
+    return _ACTION_TAG.sub("", markup or "", count=1).strip()
+
+
+def copula_rate(lines):
+    """Share of sentences that are a bare 'X is Y' assertion."""
+    total = hits = 0
+    for ln in lines:
+        for sent in _SENT.split(ln):
+            sent = sent.strip()
+            if not sent:
+                continue
+            total += 1
+            if (_COPULA.match(sent) and not _PERSONAL.search(sent)
+                    and len(_WORD.findall(sent)) <= 7):
+                hits += 1
+    return (hits / total) if total else 0.0, hits, total
+
+
+def carryover_rate(lines):
+    """Share of lines that open on a content word the previous line ended with.
+
+    Anadiplosis. Openings stay varied while the exchange is completely locked,
+    which is why opening_key alone gave the second run a false pass.
+    """
+    if len(lines) < 2:
+        return 0.0, 0, 0
+    hits = 0
+    for i in range(1, len(lines)):
+        prev = [w for w in _WORD.findall(lines[i - 1].lower()) if w not in _STOP]
+        cur = [w for w in _WORD.findall(lines[i].lower()) if w not in _STOP]
+        if prev and cur and set(prev[-3:]) & set(cur[:4]):
+            hits += 1
+    return hits / (len(lines) - 1), hits, len(lines) - 1
+
+
+def stall_score(markups):
+    """0..1 - how mechanical the recent exchange has become.
+
+    The mean of the two signals, not the max. Either one alone is ordinary
+    writing: real dialogue uses copulas, and picking up the other speaker's
+    word is how people actually argue. It is the two together - bare
+    abstractions, chained - that is the degenerate attractor.
+    """
+    lines = [spoken(m) for m in markups if spoken(m)]
+    if len(lines) < 4:
+        return 0.0
+    return (copula_rate(lines)[0] + carryover_rate(lines)[0]) / 2
+
+
 # ---------------------------------------------------------------- generation
 
 ANTI_MIRROR = ("Your last lines in this scene opened with \"{key}\". Do not "
                "begin this line that way, and do not reuse that sentence shape. "
                "Open differently.")
+
+
+def _guidance(conn, session_id, speaker_row, stream):
+    """Corrective notes appended to the persona tail for this turn only."""
+    notes = []
+    forbid_action = False
+
+    # Action scarcity, enforced rather than requested.
+    if ACTION_RUN > 0:
+        run = [r["markup"] for r in db.recent_by_speaker(
+            conn, session_id, speaker_row["id"], limit=ACTION_RUN)]
+        if len(run) >= ACTION_RUN and all(has_action(m) for m in run):
+            notes.append(NO_ACTION_NOTE)
+            forbid_action = True
+
+    # Shape lock: the exchange has stopped moving and is trading definitions.
+    recent = db.turns(conn, session_id)[-6:]
+    score = stall_score([r["markup"] for r in recent
+                         if r["origin"] == "ai" and r["speaker"] != "Narrator"])
+    if score >= 0.5:
+        notes.append(STALL_NOTE)
+        if stream:
+            print(f"\033[2m  [exchange has stalled ({int(score * 100)}%) - "
+                  f"nudging]\033[0m")
+
+    return "\n\n".join(notes), forbid_action
 
 
 def generate_turn(conn, session_id, speaker_row, caches, temp=0.85, stream=True,
@@ -233,18 +354,30 @@ def generate_turn(conn, session_id, speaker_row, caches, temp=0.85, stream=True,
             print()
         return clean_line("".join(parts), speaker_row["name"])
 
-    line = once("", temp)
-    if not anti_mirror or not line:
+    guidance, forbid_action = _guidance(conn, session_id, speaker_row, stream)
+    line = once(guidance, temp)
+    if not line:
         return line
 
-    # Resample once if this speaker has opened the same way twice already.
-    recent = [r["markup"] for r in db.recent_by_speaker(conn, session_id,
-                                                        speaker_row["id"], limit=2)]
-    key = opening_key(line)
-    if key and len(recent) >= 2 and all(opening_key(m) == key for m in recent):
-        if stream:
-            print(f"\033[2m  [\"{key}...\" for the third time - resampling]\033[0m")
-        line = once(ANTI_MIRROR.format(key=key), min(1.15, temp + 0.15)) or line
+    if anti_mirror:
+        # Resample once if this speaker has opened the same way twice already.
+        recent = [r["markup"] for r in db.recent_by_speaker(
+            conn, session_id, speaker_row["id"], limit=2)]
+        key = opening_key(line)
+        if key and len(recent) >= 2 and all(opening_key(m) == key for m in recent):
+            if stream:
+                print(f"\033[2m  [\"{key}...\" for the third time - "
+                      f"resampling]\033[0m")
+            extra = (guidance + "\n\n" + ANTI_MIRROR.format(key=key)).strip()
+            line = once(extra, min(1.15, temp + 0.15)) or line
+
+    # Backstop: the instruction is ignored often enough to need enforcing.
+    if forbid_action and has_action(line):
+        stripped = strip_action(line)
+        if stripped:
+            if stream:
+                print(f"\033[2m  [action run capped - tag dropped]\033[0m")
+            line = stripped
     return line
 
 

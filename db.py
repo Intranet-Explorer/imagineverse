@@ -30,6 +30,7 @@ MIGRATIONS = [
     ("session", "summary", "TEXT NOT NULL DEFAULT ''"),
     ("session", "summary_upto", "INTEGER NOT NULL DEFAULT 0"),
     ("location", "camera_contract", "TEXT NOT NULL DEFAULT ''"),
+    ("relationship", "concedes", "TEXT NOT NULL DEFAULT ''"),
     ("location", "staging", "TEXT NOT NULL DEFAULT '[]'"),
 ]
 
@@ -229,15 +230,16 @@ def turn_pop(conn, sid):
 # ---------- relationship ----------
 
 def relationship_upsert(conn, world_id, from_id, to_id, wants, withholds,
-                        history="", friction=""):
+                        history="", friction="", concedes=""):
     conn.execute(
         """INSERT INTO relationship
-           (world_id, from_id, to_id, wants, withholds, history, friction)
-           VALUES (?,?,?,?,?,?,?)
+           (world_id, from_id, to_id, wants, withholds, history, friction, concedes)
+           VALUES (?,?,?,?,?,?,?,?)
            ON CONFLICT(from_id, to_id) DO UPDATE SET
              wants=excluded.wants, withholds=excluded.withholds,
-             history=excluded.history, friction=excluded.friction""",
-        (world_id, from_id, to_id, wants, withholds, history, friction),
+             history=excluded.history, friction=excluded.friction,
+             concedes=excluded.concedes""",
+        (world_id, from_id, to_id, wants, withholds, history, friction, concedes),
     )
     conn.commit()
 
@@ -249,10 +251,12 @@ def relationship_pair_insert(conn, world_id, a_id, b_id, spec):
     fric = spec.get("friction", "")
     relationship_upsert(conn, world_id, a_id, b_id,
                         spec.get("a_wants_from_b", ""),
-                        spec.get("a_withholds", ""), hist, fric)
+                        spec.get("a_withholds", ""), hist, fric,
+                        spec.get("a_concedes", ""))
     relationship_upsert(conn, world_id, b_id, a_id,
                         spec.get("b_wants_from_a", ""),
-                        spec.get("b_withholds", ""), hist, fric)
+                        spec.get("b_withholds", ""), hist, fric,
+                        spec.get("b_concedes", ""))
 
 
 def relationships_from(conn, from_id, to_ids=None):

@@ -30,7 +30,9 @@ Schema:
        - the specific social move you make when someone will not give you that:
          deflect, flatter, needle, go quiet, change the subject, make it a joke,
          restate the demand louder. Name ONE and make it particular.
-       - one thing you are wrong about and will defend anyway
+       - one thing you are wrong about and will defend anyway, AND the
+         specific thing that would make you doubt it. A character who cannot
+         be moved at all produces a stalemate, not a scene.
        - what you will not admit, and what it would cost you to admit it
      Behavioural directives, not adjectives.",
   "voice": {
@@ -107,12 +109,24 @@ Schema:
   "b_wants_from_a": "Same, from B's side. It must NOT be the mirror image of
      a_wants_from_b - if both want the same thing the scene resolves in three
      lines.",
-  "b_withholds": "What B will not say first, and what it would cost."
+  "b_withholds": "What B will not say first, and what it would cost.",
+  "a_concedes": "The scene's exit. Name the specific thing B could say, do or
+     admit that would actually move A off their position - and what it costs A
+     to be moved. Not 'A never concedes'. Something real and reachable inside
+     one conversation.",
+  "b_concedes": "The same for B, and it must be a different kind of thing than
+     a_concedes."
 }
 
 The point of this record is that a scene between these two has somewhere to go
 before anyone speaks. If your friction could be settled by one person simply
-explaining themselves, it is too weak - rewrite it."""
+explaining themselves, it is too weak - rewrite it.
+
+But a stalemate is not drama either. An observed failure: friction written as
+"neither will concede" produced eighty turns in which nothing moved, because
+nothing COULD. With position frozen the only variable left is intensity, so
+the scene escalated physically instead of developing. Both characters must
+have a reachable exit even if neither takes it."""
 
 # ---------------------------------------------------------------- premise
 
@@ -123,7 +137,7 @@ Return ONLY a JSON object. No preamble, no markdown fences, no commentary.
 
 Schema:
 {
-  "premise": "2-3 sentences, present tense. Why these people are in this room
+  "premise": "2-3 sentences, present tense. Why these people are in THIS ROOM
      RIGHT NOW, and what is unresolved. It must contain something that gets
      worse if nobody speaks - a deadline, someone about to leave, a decision
      that defaults badly, a thing already said that cannot be taken back.",
@@ -133,7 +147,17 @@ Schema:
 
 Do NOT write a premise that is only a setting and an activity. 'They meet in a
 lab and test equipment' gives the characters nothing to want. Something must
-already be wrong."""
+already be wrong.
+
+Use the LOCATION you are given. Do not invent a different room, and do not
+move the scene somewhere more convenient. An observed failure: given a control
+room full of server racks, the premise invented a green room and a recording
+studio, and the scene spent eighty turns in a space that was never described.
+The furniture named in the location is the furniture the characters can reach.
+
+Do NOT resolve the friction in advance. Setting up a document that only needs
+signing, or an ultimatum with one obvious answer, railroads the scene into a
+single move. Give them a pressure, not a script."""
 
 # ---------------------------------------------------------------- locations
 
