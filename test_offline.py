@@ -285,5 +285,61 @@ check("exit reaches the persona tail", "What would actually move you:" in u)
 check("exit sits after the transcript",
       u.index("TRANSCRIPT SO FAR") < u.index("What would actually move you:"))
 
+# ============================ 12. stall starves the window ===============
+print("\n[12] stalled sessions get a shrunken verbatim window")
+sid5 = db.session_create(c2, w, lid, "p", [cid_a, cid_b])
+lock = ["Proof is a log. The log is closed.",
+        "A closed log is a loop. The loop has no decay.",
+        "Decay is a variable. The variable is a glitch.",
+        "A glitch is a loop. The loop is a sample.",
+        "A sample is a master. The master is a standard.",
+        "A standard is a limit. The limit is a frame.",
+        "A frame is broken. The broken is a cost.",
+        "Cost is final. Final is a stop.",
+        "A stop is silence. Silence is a void.",
+        "A void is a master. The master is yours."]
+for i, t in enumerate(lock):
+    db.turn_append(c2, sid5, "Ada" if i % 2 == 0 else "Bo", t, "ai",
+                   cid_a if i % 2 == 0 else cid_b)
+_, u_lock = play.build_prompt(c2, sid5, ada)
+sent = u_lock[u_lock.index("TRANSCRIPT SO FAR"):u_lock.index("You are now writing as")]
+check("stalled window is truncated to STALL_WINDOW",
+      sent.count("Ada:") + sent.count("Bo:") == play.STALL_WINDOW,
+      sent.count("Ada:") + sent.count("Bo:"))
+
+sid6 = db.session_create(c2, w, lid, "p", [cid_a, cid_b])
+live_lines = ["The tremor is a syncopation error. Your printout is wrong.",
+              "You have two minutes before the log timestamps your refusal.",
+              "Four milliseconds is mechanical. You conflate hardware with variance.",
+              "I played the bridge at six-five. You flattened it.",
+              "Sign it. I have another session at eight.",
+              "Then read the take sheet before you hand me a pen.",
+              "The take sheet is not the contract.",
+              "It is the only page with my name spelled right.",
+              "Your name is not the asset here.",
+              "No. But my hands are."]
+for i, t in enumerate(live_lines):
+    db.turn_append(c2, sid6, "Ada" if i % 2 == 0 else "Bo", t, "ai",
+                   cid_a if i % 2 == 0 else cid_b)
+_, u_live = play.build_prompt(c2, sid6, ada)
+sent2 = u_live[u_live.index("TRANSCRIPT SO FAR"):u_live.index("You are now writing as")]
+check("a live scene keeps its full window",
+      sent2.count("Ada:") + sent2.count("Bo:") == len(live_lines),
+      sent2.count("Ada:") + sent2.count("Bo:"))
+check("truncation actually shortens the prompt", len(u_lock) < len(u_live),
+      f"{len(u_lock)} vs {len(u_live)}")
+
+# forbidden action is not streamed before being stripped
+import io, contextlib
+db.turn_append(c2, sid6, "Ada", "<nods> tagged", "ai", cid_a)
+stub.next_line = "<shrugs> Two."
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    out = play.generate_turn(c2, sid6, ada, stub.SpeakerCache(), stream=True)
+printed = buf.getvalue()
+check("stripped tag never reaches the terminal", "<shrugs>" not in printed,
+      repr(printed[:80]))
+check("the cleaned line is printed", "Two." in printed and out == "Two.", (out, printed[:60]))
+
 print("\n" + ("ALL PASS" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
 sys.exit(1 if FAIL else 0)

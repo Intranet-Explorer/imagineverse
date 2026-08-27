@@ -26,6 +26,14 @@ SUMMARIZE_EVERY = int(os.environ.get("IMAGINARIUM_SUMMARIZE_EVERY", "12"))
 # test does not create scarcity; a run limit does. 0 disables the cap.
 ACTION_RUN = int(os.environ.get("IMAGINARIUM_ACTION_RUN", "1"))
 
+# When the recent exchange has locked into a pattern, sending WINDOW turns of
+# that pattern guarantees the model continues it - a one-line nudge in the
+# tail cannot outweigh twenty-four worked examples sitting above it. Once
+# stalled, send this many verbatim turns instead and let the summary carry the
+# rest. Deliberately lossy: the turns between the summary and this window get
+# dropped, and they are the locked ones.
+STALL_WINDOW = int(os.environ.get("IMAGINARIUM_STALL_WINDOW", "6"))
+
 FORMAT_RULES = """OUTPUT FORMAT - follow exactly:
 
 Write exactly ONE line. The line is:
@@ -123,11 +131,21 @@ def _relationship_block(conn, speaker_row, cast):
     return "\n" + "\n".join(out)
 
 
+def _recent_ai(rows, n):
+    return [r["markup"] for r in rows[-n:]
+            if r["origin"] == "ai" and r["speaker"] != "Narrator"]
+
+
 def _transcript(conn, session_id, sess):
     """Rolling summary plus the recent window, instead of the whole log."""
     upto = sess["summary_upto"] if "summary_upto" in sess.keys() else 0
     summary = sess["summary"] if "summary" in sess.keys() else ""
     rows = db.turns_range(conn, session_id, upto)
+
+    # Starve the pattern of examples once it has taken hold.
+    if len(rows) > STALL_WINDOW and stall_score(_recent_ai(rows, 8)) >= 0.5:
+        rows = rows[-STALL_WINDOW:]
+
     body = "\n".join(f"{r['speaker']}: {r['markup']}" for r in rows)
     if summary and upto:
         head = f"EARLIER IN THIS SCENE\n{summary}\n\nSINCE THEN\n"
@@ -342,20 +360,23 @@ def _guidance(conn, session_id, speaker_row, stream):
 
 def generate_turn(conn, session_id, speaker_row, caches, temp=0.85, stream=True,
                   anti_mirror=True):
-    def once(extra, t):
+    def once(extra, t, live):
         prompt = build_prompt(conn, session_id, speaker_row, extra=extra)
         key = f"s{session_id}:c{speaker_row['id']}"
         parts = []
         for chunk in llm.stream_line(prompt, key, caches, temp=t):
             parts.append(chunk)
-            if stream:
+            if live:
                 print(chunk, end="", flush=True)
-        if stream:
+        if live:
             print()
         return clean_line("".join(parts), speaker_row["name"])
 
     guidance, forbid_action = _guidance(conn, session_id, speaker_row, stream)
-    line = once(guidance, temp)
+    # If the tag is going to be stripped, do not stream it first - printing a
+    # line and then announcing part of it was discarded is worse than waiting.
+    live = stream and not forbid_action
+    line = once(guidance, temp, live)
     if not line:
         return line
 
@@ -369,15 +390,15 @@ def generate_turn(conn, session_id, speaker_row, caches, temp=0.85, stream=True,
                 print(f"\033[2m  [\"{key}...\" for the third time - "
                       f"resampling]\033[0m")
             extra = (guidance + "\n\n" + ANTI_MIRROR.format(key=key)).strip()
-            line = once(extra, min(1.15, temp + 0.15)) or line
+            line = once(extra, min(1.15, temp + 0.15), live) or line
 
     # Backstop: the instruction is ignored often enough to need enforcing.
     if forbid_action and has_action(line):
         stripped = strip_action(line)
         if stripped:
-            if stream:
-                print(f"\033[2m  [action run capped - tag dropped]\033[0m")
             line = stripped
+    if stream and not live:
+        print(line)
     return line
 
 
