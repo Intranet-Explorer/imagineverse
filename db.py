@@ -278,18 +278,27 @@ def relationships_from(conn, from_id, to_ids=None):
     ).fetchall()
 
 
-def relationship_pairs_missing(conn, world_id, char_ids):
-    """Unordered pairs among char_ids with no relationship row yet."""
-    have = set()
+def relationship_pairs_missing(conn, world_id, char_ids, require_exit=True):
+    """Unordered pairs among char_ids whose relationship is absent or incomplete.
+
+    A row written before the `concedes` column existed has no exit, which is
+    the field that stops the pair deadlocking. Treat that as incomplete rather
+    than silently leaving a stalemate in place.
+    """
+    have = {}
     for r in conn.execute(
-        "SELECT from_id, to_id FROM relationship WHERE world_id = ?", (world_id,)
+        "SELECT from_id, to_id, concedes FROM relationship WHERE world_id = ?",
+        (world_id,)
     ):
-        have.add((r["from_id"], r["to_id"]))
+        have[(r["from_id"], r["to_id"])] = (r["concedes"] or "").strip()
     out = []
     ids = sorted(char_ids)
     for i, a in enumerate(ids):
         for b in ids[i + 1:]:
-            if (a, b) not in have or (b, a) not in have:
+            fwd, rev = have.get((a, b)), have.get((b, a))
+            if fwd is None or rev is None:
+                out.append((a, b))
+            elif require_exit and (not fwd or not rev):
                 out.append((a, b))
     return out
 

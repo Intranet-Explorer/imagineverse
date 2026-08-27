@@ -55,7 +55,7 @@ def _ensure_relationships(conn, world_id, char_ids, ask=True):
         return 0
     if ask:
         n = len(pairs)
-        a = input(f"\n{n} pair(s) have no history between them. Write it? [Y/n] ")
+        a = input(f"\n{n} pair(s) need a history written or rewritten. Do it? [Y/n] ")
         if a.strip().lower() not in ("", "y"):
             return 0
     made = 0
@@ -253,6 +253,36 @@ def cmd_session_new(args):
     if opening:
         db.turn_append(conn, sid, "Narrator", opening, "ai")
     print(f"\nsession {sid} created. run:  python cli.py play {sid}")
+
+
+def cmd_rel_list(args):
+    conn = db.init()
+    wid = db.world_get_or_create(conn, args.world)
+    for c in db.character_list(conn, wid):
+        for r in db.relationships_from(conn, c["id"]):
+            exit_ = r["concedes"] or "\033[31m(none - will deadlock)\033[0m"
+            print(f"\n{c['name']} -> {r['to_name']}")
+            print(f"  wants     {r['wants']}")
+            print(f"  withholds {r['withholds']}")
+            print(f"  exit      {exit_}")
+    print()
+
+
+def cmd_rel_redo(args):
+    """Rewrite relationships, including ones that already exist."""
+    conn = db.init()
+    wid = db.world_get_or_create(conn, args.world)
+    chars = db.character_list(conn, wid)
+    if len(chars) < 2:
+        print("need at least two characters.")
+        return
+    ids = [c["id"] for c in chars]
+    if args.all:
+        conn.execute("DELETE FROM relationship WHERE world_id = ?", (wid,))
+        conn.commit()
+        print("cleared existing relationships.")
+    n = _ensure_relationships(conn, wid, ids, ask=not args.yes)
+    print(f"\nwrote {n} pair(s).")
 
 
 def cmd_models(args):
@@ -544,6 +574,14 @@ def main():
     lo = sub.add_parser("loc").add_subparsers(dest="sub", required=True)
     add_world(lo.add_parser("new")); lo.choices["new"].set_defaults(fn=cmd_loc_new)
     add_world(lo.add_parser("list")); lo.choices["list"].set_defaults(fn=cmd_loc_list)
+
+    rl = sub.add_parser("rel").add_subparsers(dest="sub", required=True)
+    add_world(rl.add_parser("list")); rl.choices["list"].set_defaults(fn=cmd_rel_list)
+    redo = rl.add_parser("redo"); add_world(redo)
+    redo.add_argument("--all", action="store_true",
+                      help="rewrite every pair, not just incomplete ones")
+    redo.add_argument("--yes", action="store_true", help="skip the confirmation")
+    redo.set_defaults(fn=cmd_rel_redo)
 
     se = sub.add_parser("session").add_subparsers(dest="sub", required=True)
     add_world(se.add_parser("new")); se.choices["new"].set_defaults(fn=cmd_session_new)

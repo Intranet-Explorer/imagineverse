@@ -95,7 +95,17 @@ if chars:
     check("both directions written", len(ra) == 1 and len(rb) == 1)
     check("wants are not mirrored", ra[0]["wants"] != rb[0]["wants"])
     check("history is symmetric", ra[0]["history"] == rb[0]["history"])
-    check("no missing pairs now", db.relationship_pairs_missing(conn, 1, [a["id"], b["id"]]) == [])
+    check("a pair with no exit counts as incomplete",
+          db.relationship_pairs_missing(conn, 1, [a["id"], b["id"]]) != [])
+    check("...and is complete once concedes is written",
+          db.relationship_pairs_missing(conn, 1, [a["id"], b["id"]],
+                                        require_exit=False) == [])
+    db.relationship_pair_insert(conn, 1, a["id"], b["id"], {
+        "history": "h", "friction": "f",
+        "a_wants_from_b": "w", "a_withholds": "x", "a_concedes": "if he says it out loud",
+        "b_wants_from_a": "y", "b_withholds": "z", "b_concedes": "if she stays past six"})
+    check("exit on both sides clears it",
+          db.relationship_pairs_missing(conn, 1, [a["id"], b["id"]]) == [])
     db.relationship_pair_insert(conn, 1, a["id"], b["id"], {"history": "h2", "friction": "f2",
         "a_wants_from_b": "w", "a_withholds": "x", "b_wants_from_a": "y", "b_withholds": "z"})
     check("upsert does not duplicate",
