@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Score a session on the failure modes the first voice test exposed.
+"""Score a session for template lock, action inflation and shape lock.
 
     python3 scenestats.py [session_id ...]
 
 Reports, per speaker: how many distinct ways they open a line, their most
 repeated opening, and the share of their turns carrying an action tag. The
-headline number is DISTINCT OPENINGS — template lock shows up there long
-before it shows up in your impression of the transcript.
+headline number is distinct openings: template lock shows there before it
+shows in a read of the transcript.
 """
 import os
 import sqlite3
@@ -17,12 +17,11 @@ import play
 
 
 def read_only():
-    """Open the database without writing to it.
+    """Open the database read-only.
 
-    Deliberately NOT db.init(): that runs migrations, and a reporting tool has
-    no business altering the file it is reporting on. (It also fails outright
-    on some network/virtual filesystems, where a half-applied ALTER leaves a
-    hot journal behind and the database refuses to open at all.)
+    Not db.init(): that migrates, and a report shouldn't alter its input. On
+    some network filesystems a half-applied ALTER also leaves a hot journal
+    and the database won't open.
     """
     path = os.environ.get("IMAGINARIUM_DB", "imaginarium.db")
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -61,10 +60,9 @@ def stats(conn, sid):
     worst = 0
     for name, lines in speakers.items():
         print(f"  {name}")
-        # Two measures, because they catch different locks. A fixed bigram
-        # ("I observe ...") shows up in the 2-word key. A fixed prefix
-        # ("Analyzing: ..." / "Logging: ...") varies at word two but is just
-        # as locked, and only the 1-word key sees it.
+        # A fixed bigram ("I observe ...") shows in the 2-word key. A fixed
+        # prefix ("Analyzing: ...", "Logging: ...") varies at word two; only
+        # the 1-word key catches it.
         for label, n_words in (("first word ", 1), ("first two ", 2)):
             keys = [play.opening_key(m, n_words) for m in lines]
             uniq = len(set(keys))
@@ -75,10 +73,8 @@ def stats(conn, sid):
             print(f"    distinct {label}   {flag}{uniq}/{len(lines)}\033[0m"
                   f"   most repeated \"{top}…\" x{n}")
 
-    # Openings are only one kind of lock. The second run kept its openings
-    # varied and still degenerated into trading "X is Y" definitions, each
-    # line picking up the noun the last one ended on. Measure that too, or
-    # this script hands out a false pass.
+    # Shape lock: varied openings, but lines trade "X is Y" definitions,
+    # each picking up the last line's noun. Openings alone miss it.
     lines = [play.spoken(r["markup"]) for r in ai]
     cop, ch, ct = play.copula_rate(lines)
     car, rh, rt = play.carryover_rate(lines)

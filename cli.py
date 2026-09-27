@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Imaginarium v0 — text-only. No images anywhere by design.
+"""Imaginarium v0. Text only.
 
     python cli.py char new   --world "Between the Stations"
     python cli.py loc new    --world "Between the Stations"
@@ -470,9 +470,7 @@ def cmd_play(args):
             parts = raw.split(maxsplit=1)
             if len(parts) > 1:
                 try:
-                    # load_model resolves a bare stem to its full tag; using the
-                    # raw input instead set MODEL to something that 404s at
-                    # generation time.
+                    # resolve a bare stem to its full tag, or generation 404s
                     resolved, _ = llm.load_model(parts[1].strip())
                     llm.set_model(resolved)
                     caches.invalidate()

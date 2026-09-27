@@ -1,10 +1,9 @@
 """Character, relationship, location and premise generation.
 
-One description in, structured record out — but never in isolation. A character
-generated with no knowledge of the cast it is joining converges on the same
-archetype as the last one, and two personas written against an implied (absent)
-human partner produce polite status updates when cast against each other. Every
-generator here takes the surrounding world as input.
+One description in, structured record out. Every generator takes the
+surrounding world as input: a character written without the cast converges on
+the last archetype, and personas written against an absent human partner
+trade polite status updates.
 """
 import json
 import re

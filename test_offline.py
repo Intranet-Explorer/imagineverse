@@ -1,10 +1,10 @@
-"""Offline regression tests: exercises schema migration, relationships, prompt
-assembly, the rolling summary and the anti-mirror resample against a stub llm.
+"""Offline regression tests against a stub llm: migration, relationships,
+prompt assembly, summary, anti-mirror, shape metrics, action cap, stalls.
 
     python3 test_offline.py
 
-No Ollama, no network, no model. Runs on a throwaway copy of imaginarium.db if
-one exists, so it never touches live data."""
+No Ollama, no network. Uses a throwaway copy of imaginarium.db if one exists,
+so live data is never touched."""
 import os, sys, json, types, shutil, tempfile
 
 SRC = os.path.dirname(os.path.abspath(__file__))
@@ -45,7 +45,7 @@ def check(name, cond, detail=""):
     print(("  ok   " if cond else "  FAIL ") + name + ("" if cond else "  " + str(detail)))
     if not cond: FAIL.append(name)
 
-# ============================ 1. migration on the REAL database ==========
+# ============================ 1. migration on the real database ==========
 tmp = tempfile.mkdtemp()
 live = os.path.join(tmp, "live.db")
 _real = os.path.join(SRC, "imaginarium.db")

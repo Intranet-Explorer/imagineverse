@@ -4,10 +4,10 @@ Block order is system -> transcript -> persona, persona LAST. Ollama's runner
 keeps the previous request's KV cache and matches the longest common prefix, so
 alternating speakers only re-prefill the persona tail. Do not reorder these.
 
-The persona tail now also carries the speaker's relationships, because they are
-speaker-specific and would break the shared prefix if they sat in the system
-block. The rolling summary sits at the top of the user block: it changes only
-every SUMMARIZE_EVERY turns, so most turns still hit the cache.
+The persona tail also carries the speaker's relationships; they are
+speaker-specific and would break the shared prefix in the system block. The
+rolling summary heads the user block. It changes only every SUMMARIZE_EVERY
+turns, so most turns still hit the cache.
 """
 import json
 import os
@@ -16,22 +16,19 @@ import re
 import db
 import llm
 
-# How many turns are sent verbatim, and how much slack before we re-summarise.
+# Turns sent verbatim, and slack before re-summarising.
 WINDOW = int(os.environ.get("IMAGINARIUM_WINDOW", "24"))
 SUMMARIZE_EVERY = int(os.environ.get("IMAGINARIUM_SUMMARIZE_EVERY", "12"))
 
-# How many consecutive lines from one speaker may carry an action tag. The
-# earn-its-place rule in FORMAT_RULES improved what the actions SAY without
-# touching how often they appear - 79 of 80 turns still had one. A quality
-# test does not create scarcity; a run limit does. 0 disables the cap.
+# Consecutive lines from one speaker that may carry an action tag. The
+# earn-its-place rule improves what actions say, not how often they appear;
+# a run limit does that. 0 disables the cap.
 ACTION_RUN = int(os.environ.get("IMAGINARIUM_ACTION_RUN", "1"))
 
-# When the recent exchange has locked into a pattern, sending WINDOW turns of
-# that pattern guarantees the model continues it - a one-line nudge in the
-# tail cannot outweigh twenty-four worked examples sitting above it. Once
-# stalled, send this many verbatim turns instead and let the summary carry the
-# rest. Deliberately lossy: the turns between the summary and this window get
-# dropped, and they are the locked ones.
+# Once the exchange locks into a pattern, a full WINDOW of it outweighs any
+# nudge in the tail. When stalled, send only this many verbatim turns and let
+# the summary carry the rest. Deliberately lossy: the dropped turns are the
+# locked ones.
 STALL_WINDOW = int(os.environ.get("IMAGINARIUM_STALL_WINDOW", "6"))
 
 FORMAT_RULES = """OUTPUT FORMAT - follow exactly:
@@ -246,14 +243,14 @@ def clean_line(text, speaker_name):
 _ACTION_TAG = re.compile(r"^\s*<[^>]*>\s*")
 _WORD = re.compile(r"[a-z0-9']+")
 _SENT = re.compile(r"(?<=[.!?])\s+")
-# "X is Y" with nothing else going on. Two characters trading these is the
-# degenerate mode that replaced template lock once openings were unlocked.
+# "X is Y" with nothing else going on. Two characters trading these is a
+# lock that varied openings don't catch.
 _COPULA = re.compile(
     r"^(the |a |an )?[\w' ]{1,28}? (is|are|was|were) (the |a |an )?[\w' ]{1,28}[.!?]?$",
     re.I)
-# Ordinary dialogue is full of copulas ("Your printout is wrong"). The
-# degenerate mode is copulas between BARE ABSTRACTIONS, with nobody in them -
-# so a personal or possessive pronoun anywhere disqualifies the sentence.
+# Ordinary dialogue is full of copulas ("Your printout is wrong"). The lock
+# is copulas between bare abstractions, so any personal or possessive pronoun
+# disqualifies the sentence.
 _PERSONAL = re.compile(r"\b(i|me|my|mine|you|your|yours|he|him|his|she|her|hers|"
                        r"we|us|our|ours|they|them|their|theirs)\b", re.I)
 _STOP = frozenset("the a an is are was were be been it its this that of to in "
@@ -297,8 +294,8 @@ def copula_rate(lines):
 def carryover_rate(lines):
     """Share of lines that open on a content word the previous line ended with.
 
-    Anadiplosis. Openings stay varied while the exchange is completely locked,
-    which is why opening_key alone gave the second run a false pass.
+    Anadiplosis. Openings can stay varied while the exchange is locked, so
+    opening_key alone gives a false pass.
     """
     if len(lines) < 2:
         return 0.0, 0, 0
@@ -314,10 +311,8 @@ def carryover_rate(lines):
 def stall_score(markups):
     """0..1 - how mechanical the recent exchange has become.
 
-    The mean of the two signals, not the max. Either one alone is ordinary
-    writing: real dialogue uses copulas, and picking up the other speaker's
-    word is how people actually argue. It is the two together - bare
-    abstractions, chained - that is the degenerate attractor.
+    Mean of the two signals, not the max. Either alone is ordinary dialogue;
+    bare abstractions chained together is the lock.
     """
     lines = [spoken(m) for m in markups if spoken(m)]
     if len(lines) < 4:
@@ -373,8 +368,7 @@ def generate_turn(conn, session_id, speaker_row, caches, temp=0.85, stream=True,
         return clean_line("".join(parts), speaker_row["name"])
 
     guidance, forbid_action = _guidance(conn, session_id, speaker_row, stream)
-    # If the tag is going to be stripped, do not stream it first - printing a
-    # line and then announcing part of it was discarded is worse than waiting.
+    # If the tag will be stripped, don't stream it first.
     live = stream and not forbid_action
     line = once(guidance, temp, live)
     if not line:
@@ -392,7 +386,7 @@ def generate_turn(conn, session_id, speaker_row, caches, temp=0.85, stream=True,
             extra = (guidance + "\n\n" + ANTI_MIRROR.format(key=key)).strip()
             line = once(extra, min(1.15, temp + 0.15), live) or line
 
-    # Backstop: the instruction is ignored often enough to need enforcing.
+    # Backstop: the model ignores the instruction often enough.
     if forbid_action and has_action(line):
         stripped = strip_action(line)
         if stripped:

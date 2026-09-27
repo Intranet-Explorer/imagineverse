@@ -16,9 +16,9 @@ def connect():
 
 
 def _ensure_column(conn, table, column, decl):
-    """Add a column to an existing database. schema.sql CREATE TABLE statements
-    are IF NOT EXISTS, so they never alter a table that already exists — new
-    columns have to be migrated in explicitly."""
+    """Add a column to an existing table.
+
+    schema.sql uses CREATE TABLE IF NOT EXISTS, so new columns need this."""
     have = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")]
     if column not in have:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
@@ -246,7 +246,8 @@ def relationship_upsert(conn, world_id, from_id, to_id, wants, withholds,
 
 def relationship_pair_insert(conn, world_id, a_id, b_id, spec):
     """Write both directions of one pair from a RELATIONSHIP_SYSTEM record.
-    history and friction are symmetric and stored identically on both rows."""
+
+    history and friction are symmetric and stored on both rows."""
     hist = spec.get("history", "")
     fric = spec.get("friction", "")
     relationship_upsert(conn, world_id, a_id, b_id,
@@ -281,9 +282,8 @@ def relationships_from(conn, from_id, to_ids=None):
 def relationship_pairs_missing(conn, world_id, char_ids, require_exit=True):
     """Unordered pairs among char_ids whose relationship is absent or incomplete.
 
-    A row written before the `concedes` column existed has no exit, which is
-    the field that stops the pair deadlocking. Treat that as incomplete rather
-    than silently leaving a stalemate in place.
+    A row without `concedes` has no exit and will deadlock, so it counts as
+    incomplete.
     """
     have = {}
     for r in conn.execute(

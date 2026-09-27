@@ -1,13 +1,10 @@
-"""Ollama backend. Drop-in replacement for the MLX llm.py.
+"""Ollama backend.
 
-On prompt caching: Ollama's runner keeps the KV cache from the previous
-request and matches the longest common prefix of the next one. Because we
-put the persona block LAST, two speakers' prompts share everything up to
-that tail — so alternating speakers only re-prefills a few hundred tokens.
-That's the same benefit the MLX SpeakerCache gave us, for free. Do not
-reorder the prompt blocks in play.py.
+Ollama keeps the previous request's KV cache and reuses the longest common
+prefix. The persona block is last, so alternating speakers only re-prefill
+that tail. Don't reorder the prompt blocks in play.py.
 
-SpeakerCache is kept as a no-op shim so play.py and cli.py are unchanged.
+SpeakerCache is a no-op shim kept for play.py and cli.py.
 """
 import json
 import os
@@ -18,14 +15,12 @@ import urllib.request
 HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 MODEL = os.environ.get("IMAGINARIUM_MODEL", "qwen3.8:27b-mlx")
 
-# Ollama defaults to a 4096-token context and SILENTLY TRUNCATES past it.
-# A long transcript would quietly lose its head. Set this deliberately.
+# Ollama defaults to a 4096-token context and silently truncates past it.
 NUM_CTX = int(os.environ.get("IMAGINARIUM_CTX", "16384"))
 
-# Reasoning models emit a separate `thinking` field. Ollama's `think`
-# parameter turns it off at the source, which is what we want: one-line
-# generation and strict-JSON creation both break with reasoning on.
-# Older builds that reject the parameter fall back to a prompt directive.
+# Reasoning off via Ollama's `think` parameter: one-line generation and
+# strict-JSON creation both break with it on. Builds that reject the
+# parameter fall back to a prompt directive.
 NO_THINK = os.environ.get("IMAGINARIUM_NO_THINK", "1") == "1"
 _think_param_supported = True
 
@@ -158,12 +153,10 @@ _THINK_OPEN = re.compile(r"<think>.*$", re.S)
 
 
 def _visible(raw):
-    """Everything outside <think> blocks, including any text that preceded one.
+    """Everything outside <think> blocks, including text before one.
 
-    Monotonic by construction: as more of the stream arrives this only ever
-    grows. The previous version returned '' as soon as a block opened, which
-    made the visible view SHRINK between events — and a numeric high-water
-    mark then sat above it permanently, swallowing the real line.
+    Must only grow as the stream arrives. If it shrinks, stream_line's
+    prefix tracking stalls and the real line is lost.
     """
     t = _THINK_BLOCK.sub("", raw)
     t = _THINK_OPEN.sub("", t)
@@ -178,11 +171,9 @@ def stream_line(prompt_bundle, cache_key, caches, max_tokens=220, temp=0.85,
                 stop_on_newline=True):
     """Generate one line, yielding text chunks.
 
-    We do NOT use a server-side newline stop. Models routinely open their
-    turn with a newline, and reasoning models emit newlines inside
-    <think> blocks — either would end generation before a single visible
-    character arrived. So we buffer, strip reasoning, and cut at the first
-    newline that follows actual content.
+    No server-side newline stop: models often open with a newline, and
+    <think> blocks contain them. Buffer, strip reasoning, and cut at the
+    first newline after real content.
     """
     options = {
         "temperature": temp,
@@ -192,7 +183,7 @@ def stream_line(prompt_bundle, cache_key, caches, max_tokens=220, temp=0.85,
     }
 
     raw_buf = ""
-    # Track the exact text yielded, not its length — see _visible above.
+    # track the text yielded, not its length; see _visible
     emitted = ""
     debug = os.environ.get("IMAGINARIUM_DEBUG") == "1"
 
@@ -203,8 +194,7 @@ def stream_line(prompt_bundle, cache_key, caches, max_tokens=220, temp=0.85,
             evt = json.loads(line)
             raw_buf += evt.get("message", {}).get("content", "")
 
-            # lstrip: models routinely open a turn with a newline, and that
-            # must not count as content or as the terminating newline.
+            # a leading newline is neither content nor the terminator
             body = _visible(raw_buf).lstrip()
 
             cut = body.find("\n") if stop_on_newline else -1
@@ -226,8 +216,7 @@ def stream_line(prompt_bundle, cache_key, caches, max_tokens=220, temp=0.85,
     if debug:
         print(f"\n[raw: {raw_buf!r}]", flush=True)
     if not emitted and raw_buf.strip():
-        # everything got swallowed as reasoning — surface it rather than
-        # silently producing nothing
+        # all reasoning, no line; say so
         print(f"\n[model returned only reasoning; set IMAGINARIUM_DEBUG=1 to see it]",
               flush=True)
 
